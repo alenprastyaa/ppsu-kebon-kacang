@@ -3,6 +3,8 @@ import { ref, onMounted } from "vue";
 import axios from "axios";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
+import "simple-datatables/dist/style.css";
+import Swal from "sweetalert2";
 
 // import { useRouter } from "vue-router";
 
@@ -11,12 +13,14 @@ const sidebarOpen = ref(true);
 const startDate = ref("");
 const endDate = ref("");
 const loading = ref(false);
-const selectedRW = ref("01");
+const selectedRWStart = ref("01"); // RW Awal
+const selectedRWEnd = ref("02"); // RW Akhir
+
 // const router = useRouter();
 
 const fetchReports = async () => {
   try {
-    const response = await axios.get("http://localhost:5000/reports");
+    const response = await axios.get("https://api-v1.sipki.my.id/reports");
     reports.value = response.data;
   } catch (error) {
     console.error("Error fetching reports:", error);
@@ -34,29 +38,64 @@ const formatDate = (dateString) => {
 };
 
 const deleteReport = async (id) => {
-  if (!confirm("Apakah Anda yakin ingin menghapus laporan ini?")) {
+  const result = await Swal.fire({
+    title: "Apakah Anda yakin?",
+    text: "Laporan yang dihapus tidak dapat dikembalikan!",
+    icon: "warning",
+    showCancelButton: true,
+    confirmButtonColor: "#d33",
+    cancelButtonColor: "#3085d6",
+    confirmButtonText: "Ya, hapus!",
+    cancelButtonText: "Batal",
+  });
+
+  if (!result.isConfirmed) {
     return;
   }
+
   try {
-    await axios.delete(`http://localhost:5000/reports/${id}`);
+    await axios.delete(`https://api-v1.sipki.my.id/reports/${id}`);
     reports.value = reports.value.filter((report) => report.id !== id);
-    alert("Laporan berhasil dihapus!");
+
+    Swal.fire({
+      icon: "success",
+      title: "Berhasil!",
+      text: "Laporan berhasil dihapus.",
+      confirmButtonText: "OK",
+    });
   } catch (error) {
     console.error("Error deleting report:", error);
-    alert("Gagal menghapus laporan!");
+
+    Swal.fire({
+      icon: "error",
+      title: "Gagal!",
+      text: "Gagal menghapus laporan.",
+      confirmButtonText: "OK",
+    });
   }
 };
 
 const downloadPDF = async () => {
   loading.value = true;
 
-  if (!startDate.value || !endDate.value || !selectedRW.value) {
-    alert("Silakan pilih RW dan rentang tanggal.");
+  if (
+    !startDate.value ||
+    !endDate.value ||
+    !selectedRWStart.value ||
+    !selectedRWEnd.value
+  ) {
+    Swal.fire({
+      icon: "warning",
+      title: "Peringatan",
+      text: "Silakan pilih RW dan rentang tanggal.",
+      confirmButtonText: "OK",
+    });
     loading.value = false;
     return;
   }
 
-  console.log("Selected RW:", selectedRW.value); // Debug: Cek apakah RW ada
+  const rwStart = parseInt(selectedRWStart.value);
+  const rwEnd = parseInt(selectedRWEnd.value);
 
   const doc = new jsPDF();
   doc.setFont("helvetica", "normal");
@@ -72,20 +111,24 @@ const downloadPDF = async () => {
     theme: "plain", // Tidak menggunakan garis tebal
     body: [
       ["Kelurahan", ": Kebon Kacang"],
-      ["Tanggal", `: ${formatDate(startDate.value)} - ${formatDate(endDate.value)}`],
-      ["RW", `: ${selectedRW.value}`],
+      [
+        "Tanggal",
+        `: ${formatDate(startDate.value)} - ${formatDate(endDate.value)}`,
+      ],
+      ["RW", `: ${selectedRWStart.value} - ${selectedRWEnd.value}`],
     ],
     styles: { fontSize: 10, cellPadding: 1 },
   });
 
   // **Filter data berdasarkan RW dan rentang tanggal**
   const filteredReports = reports.value.filter((report) => {
-    if (!report.tanggal || !report.rw) return false;
     const reportDate = new Date(report.tanggal);
+    const reportRW = parseInt(report.rw);
     return (
       reportDate >= new Date(startDate.value) &&
       reportDate <= new Date(endDate.value) &&
-      report.rw === selectedRW.value
+      reportRW >= rwStart &&
+      reportRW <= rwEnd
     );
   });
 
@@ -95,18 +138,17 @@ const downloadPDF = async () => {
     return;
   }
 
-
   // Proses gambar sebelum dimasukkan ke dalam PDF
   const processedReports = await Promise.all(
     filteredReports.map(async (report, index) => {
       const kondisiBase64 = report.kondisi_lapangan_gambar
         ? await getBase64Image(
-            `http://localhost:5000/uploads/${report.kondisi_lapangan_gambar}`
+            `https://api-v1.sipki.my.id/uploads/${report.kondisi_lapangan_gambar}`
           )
         : null;
       const progresBase64 = report.progres_pekerjaan_gambar
         ? await getBase64Image(
-            `http://localhost:5000/uploads/${report.progres_pekerjaan_gambar}`
+            `https://api-v1.sipki.my.id/uploads/${report.progres_pekerjaan_gambar}`
           )
         : null;
 
@@ -114,7 +156,7 @@ const downloadPDF = async () => {
         no: index + 1,
         nama_petugas: report.nama_petugas || "-",
         nama_team: report.nama_team || "-",
-        rw :report.rw || "_",
+        rw: report.rw || "_",
         tanggal: formatDate(report.tanggal),
         sumber_informasi: report.sumber_informasi || "-",
         kondisiBase64,
@@ -128,74 +170,76 @@ const downloadPDF = async () => {
 
   // Buat tabel dengan gambar
   autoTable(doc, {
-  head: [
-    [
-      "No",
-      "Nama Petugas",
-      "Nama Team",
-      "Rw", // Dipindahkan agar urutannya benar
-      "Tanggal",
-      "Sumber Informasi",
-      "Kondisi Lapangan (Gambar)",
-      "Keterangan Kondisi",
-      "Lokasi Pekerjaan",
-      "Progres Pekerjaan (Gambar)",
-      "Keterangan Pekerjaan",
+    head: [
+      [
+        "No",
+        "Nama Petugas",
+        "Nama Team",
+        "Rw", // Dipindahkan agar urutannya benar
+        "Tanggal",
+        "Sumber Informasi",
+        "Kondisi Lapangan (Gambar)",
+        "Keterangan Kondisi",
+        "Lokasi Pekerjaan",
+        "Progres Pekerjaan (Gambar)",
+        "Keterangan Pekerjaan",
+      ],
     ],
-  ],
-  body: processedReports.map((report) => [
-    report.no,
-    report.nama_petugas,
-    report.nama_team,
-    report.rw, // ✅ Kolom Rw tetap kecil
-    report.tanggal,
-    report.sumber_informasi,
-    {
-      content: "",
-      image: report.kondisiBase64 ? report.kondisiBase64 : null,
+    body: processedReports.map((report) => [
+      report.no,
+      report.nama_petugas,
+      report.nama_team,
+      report.rw, // ✅ Kolom Rw tetap kecil
+      report.tanggal,
+      report.sumber_informasi,
+      {
+        content: "",
+        image: report.kondisiBase64 ? report.kondisiBase64 : null,
+      },
+      report.keterangan_kondisi,
+      report.lokasi_pekerjaan,
+      {
+        content: "",
+        image: report.progresBase64 ? report.progresBase64 : null,
+      },
+      report.keterangan_pekerjaan,
+    ]),
+    startY: 40,
+    theme: "grid",
+    margin: { left: 2, top: 2, right: 2 },
+    headStyles: {
+      fillColor: [255, 165, 0], // Warna oranye
+      textColor: 255,
+      fontSize: 8,
+      halign: "center",
     },
-    report.keterangan_kondisi,
-    report.lokasi_pekerjaan,
-    {
-      content: "",
-      image: report.progresBase64 ? report.progresBase64 : null,
-    },
-    report.keterangan_pekerjaan,
-  ]),
-  startY: 40,
-  theme: "grid",
-  margin: { left: 2, top: 2, right: 2 },
-  headStyles: {
-    fillColor: [0, 123, 255],
-    textColor: 255,
-    fontSize: 8,
-    halign: "center",
-  },
-  bodyStyles: { valign: "middle", halign: "center", fontSize: 10 },
-  columnStyles: {
-    3: { cellWidth: 10 }, // ✅ Lebar lebih kecil untuk Rw
-    4: { cellWidth: 20 }, // Lebar tanggal
-    5: { cellWidth: 25 }, // Lebar Sumber Informasi
-    6: { cellWidth: 30, minCellHeight: 22 }, // Kondisi Lapangan (Gambar)
-    9: { cellWidth: 30, minCellHeight: 22 }, // Progres Pekerjaan (Gambar)
-  },
-  didDrawCell: (data) => {
-    if (data.cell.raw?.image) {
-      doc.addImage(
-        data.cell.raw.image,
-        "JPEG",
-        data.cell.x + 2,
-        data.cell.y + 2,
-        27, // Lebar gambar sesuai dengan cellWidth
-        18 // Tinggi gambar sesuai dengan cell
-      );
-    }
-  },
-});
 
+    bodyStyles: { valign: "middle", halign: "center", fontSize: 10 },
+    columnStyles: {
+      3: { cellWidth: 10 }, // ✅ Lebar lebih kecil untuk Rw
+      4: { cellWidth: 20 }, // Lebar tanggal
+      5: { cellWidth: 25 }, // Lebar Sumber Informasi
+      6: { cellWidth: 30, minCellHeight: 22 }, // Kondisi Lapangan (Gambar)
+      9: { cellWidth: 30, minCellHeight: 22 }, // Progres Pekerjaan (Gambar)
+    },
+    didDrawCell: (data) => {
+      if (data.cell.raw?.image) {
+        doc.addImage(
+          data.cell.raw.image,
+          "JPEG",
+          data.cell.x + 2,
+          data.cell.y + 2,
+          27, // Lebar gambar sesuai dengan cellWidth
+          18 // Tinggi gambar sesuai dengan cell
+        );
+      }
+    },
+  });
 
   // Simpan PDF
-  doc.save(`Laporan_Pekerjaan_RW_${selectedRW.value}.pdf`); // Nama file mengandung RW
+  doc.save(
+    `Laporan_Pekerjaan_RW_${selectedRWStart.value}_to_${selectedRWEnd.value}.pdf`
+  );
   loading.value = false;
 };
 
@@ -255,43 +299,69 @@ onMounted(fetchReports);
           >Team dan Petugas</span
         >
       </div>
-      
+
       <div class="my-4 bg-gray-600 h-[1px]"></div>
     </div>
   </div>
-  <div class="max-w-7xl mx-auto bg-white p-6 rounded-lg shadow-lg">
+  <div
+    class="max-w-7xl mx-auto bg-white rounded-lg shadow-lg"
+    style="margin-left: 350px"
+  >
     <h2 class="text-2xl font-semibold text-center text-gray-700 mb-6">
       Data Pekerjaan Lapangan
     </h2>
-    <div>
     <div class="max-w-7xl mx-auto bg-white p-6 rounded-lg shadow-lg">
-    <div class="filter-section flex space-x-4">
-      <select v-model="selectedRW" class="border p-2 rounded">
-        <option v-for="rw in 11" :key="rw" :value="rw.toString().padStart(2, '0')">
-          RW {{ rw.toString().padStart(2, '0') }}
-        </option>
-      </select>
-      <input type="date" v-model="startDate" class="border p-2 rounded" />
-      <input type="date" v-model="endDate" class="border p-2 rounded" />
-      <div v-if="loading">
-        <button
-          class="bg-red-200 p-3 text-white rounded-2xl cursor-not-allowed"
-          @click="downloadPDF"
+      <div class="filter-section flex space-x-4">
+        <select
+          v-model="selectedRWStart"
+          class="border border-gray-400 p-4 rounded-xl"
         >
-          Download Loading ...
-        </button>
-      </div>
-      <div v-else>
+          <option
+            v-for="rw in 11"
+            :key="rw"
+            :value="rw.toString().padStart(2, '0')"
+          >
+            RW {{ rw.toString().padStart(2, "0") }}
+          </option>
+        </select>
+        <span class="p-4">s/d</span>
+        <select
+          v-model="selectedRWEnd"
+          class="border border-gray-400 p-4 rounded-xl"
+        >
+          <option
+            v-for="rw in 11"
+            :key="rw"
+            :value="rw.toString().padStart(2, '0')"
+          >
+            RW {{ rw.toString().padStart(2, "0") }}
+          </option>
+        </select>
+        <input
+          type="date"
+          v-model="startDate"
+          class="border border-gray-400 p-4 rounded-xl"
+        />
+        <input
+          type="date"
+          v-model="endDate"
+          class="border border-gray-400 p-4 rounded-xl"
+        />
         <button
-          class="bg-red-600 p-3 text-white rounded-2xl cursor-pointer"
+          v-if="!loading"
+          class="bg-green-600 hover:bg-green-700 p-3 text-white rounded-2xl"
           @click="downloadPDF"
         >
           Download PDF
         </button>
+        <button
+          v-else
+          class="bg-green-200 p-3 text-white rounded-2xl cursor-not-allowed"
+        >
+          Download Loading ...
+        </button>
       </div>
     </div>
-  </div>
-  </div>
     <table class="min-w-full table-auto border-collapse border border-gray-300">
       <thead class="bg-blue-900 text-white">
         <tr>
@@ -334,7 +404,7 @@ onMounted(fetchReports);
           <td class="px-4 py-2 border border-gray-100">
             <img
               v-if="report.kondisi_lapangan_gambar"
-              :src="`http://localhost:5000/uploads/${report.kondisi_lapangan_gambar}`"
+              :src="`https://api-v1.sipki.my.id/uploads/${report.kondisi_lapangan_gambar}`"
               class="w-full h-20 object-cover"
             />
           </td>
@@ -347,7 +417,7 @@ onMounted(fetchReports);
           <td class="px-4 py-2 border border-gray-100">
             <img
               v-if="report.progres_pekerjaan_gambar"
-              :src="`http://localhost:5000/uploads/${report.progres_pekerjaan_gambar}`"
+              :src="`https://api-v1.sipki.my.id/uploads/${report.progres_pekerjaan_gambar}`"
               class="w-full h-20 object-cover"
             />
           </td>
